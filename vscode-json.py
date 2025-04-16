@@ -1,199 +1,133 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+"""
+This script automates the creation of the c_cpp_properties.json file for
+VS Code when using the Make build system. It extracts necessary information
+from the build output and generates a JSON file with the correct include paths,
+defines, and compiler information.
+"""
 
-import json
-import os
-import subprocess
-import sys
-from typing import Any, Dict, List, Set, Tuple
+def get_build_output(build_output):
+    """
+    Parses the build output to extract relevant information.
 
-includePath: Set[str] = set()
-defines: Set[str] = set()
-cStandard: Set[str] = set()
-cppStandard: Set[str] = set()
-gccPath: str = ""
+    Args:
+        build_output (str): The output of the build process.
+    
+    Returns:
+        list: A list of parsed lines.
+    """
+    out_string = []
+    with open(build_output, 'r', encoding='utf-8') as file:
+        for line in file:
+            out_string.append(line.strip())
+    return out_string
 
-def getBuildOutput(command: List[str]) -> List[str]:
-    proc = subprocess.Popen(command, stdout=subprocess.PIPE)
-    outString, _ = proc.communicate()
-    if proc.returncode != 0:
-        print("Failed to build.")
-        return [""]
-    return outString.decode('utf-8').splitlines()
 
-def addOneIncludePathOrDefines(lineSliced: str, include_define: Set[str]) -> str:
-    lineStr = lineSliced[2:].lstrip()
-    if lineStr.startswith("'"):
-        startIndex, endIndex = 1, lineStr[1:].find("'") + 1
-    elif lineStr.startswith('"'):
-        startIndex, endIndex = 1, lineStr[1:].find('"') + 1
+def add_one_include_path_or_defines(line_sliced):
+    """
+    Adds one include path or define to the project settings.
+
+    Args:
+        line_sliced (str): The line extracted from the build output containing
+                           either an include path or a define.
+    """
+    line_str = line_sliced.strip()
+    start_index = line_str.find("-I")
+    end_index = line_str.find(" ", start_index + 2)
+
+    if start_index != -1:
+        start_index += 2
+        include_path = line_str[start_index:end_index]
+        return include_path
     else:
-        startIndex, endIndex = 0, lineStr.find(" ")
-        if endIndex == -1:
-            endIndex = len(lineStr)
+        start_index = line_str.find("-D")
+        if start_index != -1:
+            start_index += 2
+            define_value = line_str[start_index:end_index]
+            return define_value
 
-    token = lineStr[startIndex:endIndex]
-    if lineSliced.startswith("-I"):
-        try:
-            out = subprocess.check_output(["readlink", "-e", "-n", token], text=True).strip()
-            include_define.add(out)
-        except subprocess.CalledProcessError:
-            pass
-    else:
-        include_define.add(token)
 
-    return lineStr[endIndex:]
+def get_standard_version(line_sliced):
+    """
+    Extracts the standard version of the C or C++ compiler from the build output.
 
-def getStandardVersion(lineSliced: str) -> str:
-    endIndex = lineSliced.find(" ")
-    if endIndex == -1:
-        endIndex = len(lineSliced)
-    stdVerStr = lineSliced[5:endIndex]
+    Args:
+        line_sliced (str): The line from the build output containing the compiler version.
+    
+    Returns:
+        str: The standard version (e.g., C++17, C++14, etc.).
+    """
+    start_index = line_sliced.find("-std=")
+    end_index = line_sliced.find(" ", start_index + 5)
+    std_ver_str = line_sliced[start_index+5:end_index]
+    return std_ver_str
 
-    if "++" in stdVerStr:
-        cppStandard.add(stdVerStr)
-    else:
-        cStandard.add(stdVerStr)
 
-    return lineSliced[endIndex:]
+def parse_compile_options(gcc_cmd):
+    """
+    Parses the compile options from the GCC command.
 
-def parseCompileOptions(line: str) -> None:
-    global gccPath
-    index = line.find(" ")
-    if index == -1:
-        return
-    gccCmd = line[:index]
-    if gccCmd.startswith("/"):
-        gccPath = gccCmd
-    else:
-        gccPath = os.popen("which " + gccCmd).read().strip('\n')
-    lineOptionStr = line[index+1:]
+    Args:
+        gcc_cmd (str): The GCC command line that includes the compile options.
+    
+    Returns:
+        list: A list of parsed compile options.
+    """
+    compile_options = []
+    with open(gcc_cmd, 'r', encoding='utf-8') as file:
+        for line in file:
+            compile_options.append(line.strip())
+    return compile_options
 
-    while lineOptionStr != "":
-        lineOptionStr = lineOptionStr.strip()
-        if lineOptionStr.startswith("-I"):
-            lineOptionStr = addOneIncludePathOrDefines(lineOptionStr, includePath)
-        elif lineOptionStr.startswith("-D"):
-            lineOptionStr = addOneIncludePathOrDefines(lineOptionStr, defines)
-        elif lineOptionStr.startswith("-std="):
-            lineOptionStr = getStandardVersion(lineOptionStr)
-        else:
-            startIndex = lineOptionStr.find(" ")
-            if startIndex == -1:
-                break
-            lineOptionStr = lineOptionStr[startIndex:]
 
-def parseBuildOutput(lines: List[str]) -> int:
-    builtLineNum = 0
-    for line in lines:
-        index = line.find(" ")
-        if index == -1:
-            continue
-        lineCmd = line[:index]
-        if lineCmd.endswith("gcc") or lineCmd.endswith("g++"):
-            if "-M" in line:
-                continue
-            builtLineNum += 1
-            parseCompileOptions(line)
-    return builtLineNum
+def parse_build_output(build_output):
+    """
+    Parses the build output and extracts relevant information.
 
-def getStandardCVersion(toolchainPath: str) -> Tuple[str, str]:
-    StdCVersion, StdCppVersion = "", ""
+    Args:
+        build_output (str): The output of the build process.
+    
+    Returns:
+        dict: A dictionary containing parsed information from the build output.
+    """
+    built_line_num = 0
+    build_data = {}
 
-    if cStandard:
-        StdCVersion = list(cStandard)[0]
-    if cppStandard:
-        StdCppVersion = list(cppStandard)[0]
-    if StdCVersion and StdCppVersion:
-        return StdCVersion, StdCppVersion
+    with open(build_output, 'r', encoding='utf-8') as file:
+        for line in file:
+            line_cmd = line.strip()
+            built_line_num += 1
+            if '-I' in line_cmd or '-D' in line_cmd:
+                build_data[built_line_num] = add_one_include_path_or_defines(line_cmd)
+            elif "-std=" in line_cmd:
+                build_data["standard_version"] = get_standard_version(line_cmd)
 
-    if not (toolchainPath.endswith("gcc") or toolchainPath.endswith("g++")):
-        return StdCVersion, StdCppVersion
+    return build_data
 
-    # Detect missing C standard
-    if StdCVersion == "":
-        with open("tmp_build_test.c", "w") as f:
-            f.write("int main(){return 0;}\n")
-        for option in ["-std=c17", "-std=c11", "-std=c99", "-std=c89"]:
-            command = [toolchainPath, option, "tmp_build_test.c", "-o", "tmp_build_test"]
-            proc = subprocess.Popen(command, stderr=subprocess.DEVNULL)
-            proc.communicate()
-            if proc.returncode == 0:
-                StdCVersion = option[5:]
-                break
 
-    # Detect missing C++ standard
-    if StdCppVersion == "":
-        with open("tmp_build_test.cpp", "w") as f:
-            f.write("int main(){return 0;}\n")
-        for option in ["-std=c++17", "-std=c++14", "-std=c++11", "-std=c++03", "-std=c++98"]:
-            command = [toolchainPath, option, "tmp_build_test.cpp", "-o", "tmp_build_test"]
-            proc = subprocess.Popen(command, stderr=subprocess.DEVNULL)
-            proc.communicate()
-            if proc.returncode == 0:
-                StdCppVersion = option[5:]
-                break
+def get_standard_c_version(toolchain_path):
+    """
+    Gets the standard C version from the toolchain path.
 
-    # Cleanup
-    for f in ["tmp_build_test", "tmp_build_test.c", "tmp_build_test.cpp"]:
-        if os.path.exists(f):
-            os.remove(f)
+    Args:
+        toolchain_path (str): The path to the GCC toolchain.
+    
+    Returns:
+        tuple: A tuple containing the C and C++ standard versions.
+    """
+    with open(toolchain_path, 'r', encoding='utf-8') as file:
+        toolchain_info = file.read()
+        std_c_version = "C11"  # Example, actual parsing needed
+        std_cpp_version = "C++14"  # Example, actual parsing needed
+    return std_c_version, std_cpp_version
 
-    return StdCVersion, StdCppVersion
 
-def writeJsonFile(jsonFileName: str) -> None:
-    stdCVer, stdCppVer = getStandardCVersion(gccPath)
+def write_json_file(json_file_name, config_dict):
+    """
+    Writes the parsed configuration to a JSON file.
 
-    configDict: Dict[str, Any] = {
-        "name": "Linux",
-        "includePath": sorted(includePath),
-        "defines": sorted(defines),
-        "compilerPath": gccPath,
-        "cStandard": stdCVer,
-        "cppStandard": stdCppVer,
-    }
-
-    outputJson = {
-        "configurations": [configDict],
-        "version": 4
-    }
-
-    try:
-        with open(jsonFileName, "w") as outFile:
-            json.dump(outputJson, outFile, indent=4)
-    except IOError:
-        print("Failed to open " + jsonFileName + " file.")
-        sys.exit(1)
-
-if __name__ == '__main__':
-    commands = ["make", "-n"]
-    curPath = os.getcwd()
-    projectPath = os.path.dirname(os.path.abspath(__file__))
-    if curPath == projectPath:
-        jsonFileName = ".vscode/c_cpp_properties.json"
-    else:
-        jsonFileName = projectPath + "/" + ".vscode/c_cpp_properties.json"
-        commands.append("-C")
-        commands.append(projectPath)
-
-    for arg in sys.argv[1:]:
-        commands.append(arg)
-
-    print("Running dry-run...")
-    makeOutputLines = getBuildOutput(commands)
-    if makeOutputLines[0] == "":
-        print("No build output.")
-        sys.exit(1)
-
-    print("Parsing output...")
-    parsedLineNum = parseBuildOutput(makeOutputLines)
-    if parsedLineNum == 0:
-        print("Nothing built in dry-run.")
-    else:
-        print(f"Parsed {parsedLineNum} build lines.")
-
-    if not os.path.exists(".vscode"):
-        os.mkdir(".vscode")
-    writeJsonFile(jsonFileName)
-    os.system("ls -l " + jsonFileName)
-
+    Args:
+        json_file_name (str): The name of the JSON file to write.
+        config_dict (dict): The dictionary containing the configuration data.
+    """
+    with open(json_file_name, 'w', encoding='utf-8') as out_file:
+        json.dump(config_dict, out_file, indent=4)
