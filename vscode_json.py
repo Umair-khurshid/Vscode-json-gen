@@ -78,5 +78,5 @@ def write_json_file(data, output_path):
 if __name__ == "__main__":
     build_lines = get_build_output()
     options = parse_compile_options(build_lines)
-    output_file = ".vscode/c_cpp_properties.json"
-    write_json_file(options, output_file)
+    OUTPUT_FILE = ".vscode/c_cpp_properties.json"
+    write_json_file(options, OUTPUT_FILE)
