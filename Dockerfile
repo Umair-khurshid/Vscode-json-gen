@@ -10,11 +10,11 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Copy the script
-COPY vscode-json.py .
+COPY vscode_json.py .
 
 # Optional: make executable (still good practice)
-RUN chmod +x vscode-json.py
+RUN chmod +x vscode_json.py
 
 # Use python3 explicitly as entrypoint
-ENTRYPOINT ["python3", "./vscode-json.py"]
+ENTRYPOINT ["python3", "./vscode_json.py"]
 
